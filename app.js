@@ -6,20 +6,21 @@ const multer = require("multer");
 const rateLimit = require("express-rate-limit");
 const app = express();
 const port = 4000;
+const rabbitMQ = require("./rabbitMQ");
+const { UPLOAD_QUEUE, UPLOAD_DIRECTORY } = require("./constants");
 
 // Enable CORS for all routes
 app.use(cors());
 
 // Create the uploads directory if it doesn't exist
-const uploadDir = "uploads";
-if (!fs.existsSync(uploadDir)) {
-  fs.mkdirSync(uploadDir);
+if (!fs.existsSync(UPLOAD_DIRECTORY)) {
+  fs.mkdirSync(UPLOAD_DIRECTORY);
 }
 
 // Set up multer for file storage
 const storage = multer.diskStorage({
   destination: function (req, file, cb) {
-    cb(null, uploadDir);
+    cb(null, UPLOAD_DIRECTORY);
   },
   filename: function (req, file, cb) {
     cb(null, Date.now() + path.extname(file.originalname)); // Appending extension
@@ -74,14 +75,28 @@ app.get("/video/:segment", videoRateLimitSegments, (req, res) => {
   res.sendFile(filePath);
 });
 
+let fileChannel;
+
 app.post("/upload", upload.single("file"), (req, res) => {
   if (!req.file) {
     return res.status(400).json({ message: "No file uploaded." });
   }
+  const message = {
+    filePath: req.file.path,
+    originalName: req.file.originalname,
+  };
+
+  // Send message to RabbitMQ
+  fileChannel.sendToQueue(UPLOAD_QUEUE, Buffer.from(JSON.stringify(message)), {
+    persistent: true,
+  });
 
   res.status(201).json({ message: "File uploaded successfully" });
 });
 
-app.listen(port, () => {
+app.listen(port, async () => {
   console.log(`Server running at http://localhost:${port}`);
+  const { channel } = await rabbitMQ.connectRabbitMQ();
+  fileChannel = channel;
+  rabbitMQ.listenToRabbitMQ(channel);
 });
